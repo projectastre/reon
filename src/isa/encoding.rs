@@ -1,68 +1,99 @@
-use byteorder::*;
-use std::io::{Read, Write};
+use crate::isa::{SnesOffset, IsaResult, SnesImmediate, Rel8, Rel16, IsaError};
 
-use crate::isa::{SnesOffset, IsaResult, SnesImmediate, Rel8, Rel16};
+/// A struct representing the encoding state.
+pub struct EncodeCursor<'a> {
+    offset: usize,
+    data: &'a mut Vec<u8>,
+}
+impl <'a> EncodeCursor<'a> {
+    pub fn new(data: &'a mut Vec<u8>) -> Self {
+        EncodeCursor { offset: 0, data }
+    }
+
+    pub fn push_byte(&mut self, byte: u8) {
+        if self.offset == self.data.len() {
+            self.data.push(byte);
+        } else {
+            self.data[self.offset] = byte;
+        }
+        self.offset += 1;
+    }
+}
 
 /// A trait representing the encoding of an instruction to machine code.
 pub trait Encode {
     /// Encode an instruction to machine code.
-    fn encode(&self, w: &mut impl Write) -> IsaResult<()>;
+    fn encode(&self, w: &mut EncodeCursor<'_>) -> IsaResult<()>;
 }
 
 impl Encode for u8 {
-    #[inline(always)]
-    fn encode(&self, w: &mut impl Write) -> IsaResult<()> {
-        w.write_u8(*self)?;
+    fn encode(&self, w: &mut EncodeCursor<'_>) -> IsaResult<()> {
+        w.push_byte(*self);
         Ok(())
     }
 }
 impl Encode for u16 {
-    #[inline(always)]
-    fn encode(&self, w: &mut impl Write) -> IsaResult<()> {
-        w.write_u16::<LE>(*self)?;
+    fn encode(&self, w: &mut EncodeCursor<'_>) -> IsaResult<()> {
+        w.push_byte(*self as u8);
+        w.push_byte((*self >> 8) as u8);
         Ok(())
     }
 }
 impl Encode for SnesOffset {
-    #[inline(always)]
-    fn encode(&self, w: &mut impl Write) -> IsaResult<()> {
+    fn encode(&self, w: &mut EncodeCursor<'_>) -> IsaResult<()> {
         self.1.encode(w)?;
         self.0.encode(w)?;
         Ok(())
     }
 }
 impl Encode for SnesImmediate {
-    #[inline(always)]
-    fn encode(&self, w: &mut impl Write) -> IsaResult<()> {
+    fn encode(&self, w: &mut EncodeCursor<'_>) -> IsaResult<()> {
         match *self {
-            SnesImmediate::Imm8(v) => w.write_u8(v)?,
-            SnesImmediate::Imm16(v) => w.write_u16::<LE>(v)?,
+            SnesImmediate::Imm8(v) => v.encode(w)?,
+            SnesImmediate::Imm16(v) => v.encode(w)?,
         }
         Ok(())
     }
 }
 impl Encode for Rel8 {
-    #[inline(always)]
-    fn encode(&self, w: &mut impl Write) -> IsaResult<()> {
-        w.write_u8(self.0)?;
+    fn encode(&self, w: &mut EncodeCursor<'_>) -> IsaResult<()> {
+        self.0.encode(w)?;
         Ok(())
     }
 }
 impl Encode for Rel16 {
-    #[inline(always)]
-    fn encode(&self, w: &mut impl Write) -> IsaResult<()> {
-        w.write_u16::<LE>(self.0)?;
+    fn encode(&self, w: &mut EncodeCursor<'_>) -> IsaResult<()> {
+        self.0.encode(w)?;
         Ok(())
     }
 }
 
-#[inline(always)]
-pub fn encode_op(v: &impl OpcodeClass, w: &mut impl Write) -> IsaResult<()> {
+pub fn encode_op(v: &impl OpcodeClass, w: &mut EncodeCursor<'_>) -> IsaResult<()> {
     v.encode_operands(w)
 }
-#[inline(always)]
-pub fn encode(v: &impl Encode, w: &mut impl Write) -> IsaResult<()> {
+pub fn encode(v: &impl Encode, w: &mut EncodeCursor<'_>) -> IsaResult<()> {
     v.encode(w)
+}
+
+/// A struct representing the decoding state.
+pub struct DecodeCursor<'a> {
+    offset: usize,
+    data: &'a [u8],
+}
+impl <'a> DecodeCursor<'a> {
+    pub fn new(data: &'a [u8]) -> Self {
+        DecodeCursor { offset: 0, data }
+    }
+
+    pub fn pull_byte(&mut self) -> IsaResult<u8> {
+        if self.offset == self.data.len() {
+            Err(IsaError::Eof)
+        } else {
+            let v = self.data[self.offset];
+            self.offset += 1;
+            Ok(v)
+        }
+    }
 }
 
 /// A struct representing the context an instruction is being decoded in.
@@ -75,72 +106,65 @@ pub struct DecodeContext {
 /// A trait representing the decoding of an instruction from machine code.
 pub trait Decode: Sized {
     /// Decode an instruction from machine code.
-    fn decode(r: &mut impl Read, _: &DecodeContext) -> IsaResult<Self>;
+    fn decode(r: &mut DecodeCursor<'_>, _: &DecodeContext) -> IsaResult<Self>;
 }
 
 impl Decode for u8 {
-    #[inline(always)]
-    fn decode(r: &mut impl Read, _: &DecodeContext) -> IsaResult<Self> {
-        Ok(r.read_u8()?)
+    fn decode(r: &mut DecodeCursor<'_>, _: &DecodeContext) -> IsaResult<Self> {
+        Ok(r.pull_byte()?)
     }
 }
 impl Decode for u16 {
-    #[inline(always)]
-    fn decode(r: &mut impl Read, _: &DecodeContext) -> IsaResult<Self> {
-        Ok(r.read_u16::<LE>()?)
+    fn decode(r: &mut DecodeCursor<'_>, _: &DecodeContext) -> IsaResult<Self> {
+        Ok((r.pull_byte()? as u16) | ((r.pull_byte()? as u16) << 8))
     }
 }
 impl Decode for SnesOffset {
-    #[inline(always)]
-    fn decode(r: &mut impl Read, ctx: &DecodeContext) -> IsaResult<Self> {
+    fn decode(r: &mut DecodeCursor<'_>, ctx: &DecodeContext) -> IsaResult<Self> {
         let offset = u16::decode(r, ctx)?;
         let bank = u8::decode(r, ctx)?;
         Ok(SnesOffset(bank, offset))
     }
 }
 impl Decode for Rel8 {
-    #[inline(always)]
-    fn decode(r: &mut impl Read, _: &DecodeContext) -> IsaResult<Self> {
-        Ok(Rel8(r.read_u8()?))
+    fn decode(r: &mut DecodeCursor<'_>, ctx: &DecodeContext) -> IsaResult<Self> {
+        Ok(Rel8(u8::decode(r, ctx)?))
     }
 }
 impl Decode for Rel16 {
-    #[inline(always)]
-    fn decode(r: &mut impl Read, _: &DecodeContext) -> IsaResult<Self> {
-        Ok(Rel16(r.read_u16::<LE>()?))
+    fn decode(r: &mut DecodeCursor<'_>, ctx: &DecodeContext) -> IsaResult<Self> {
+        Ok(Rel16(u16::decode(r, ctx)?))
     }
 }
 
-fn decode_imm(r: &mut impl Read, is_8_bit: bool) -> IsaResult<SnesImmediate> {
+fn decode_imm(
+    r: &mut DecodeCursor<'_>, ctx: &DecodeContext, is_8_bit: bool,
+) -> IsaResult<SnesImmediate> {
     if is_8_bit {
-        Ok(SnesImmediate::Imm8(r.read_u8()?))
+        Ok(SnesImmediate::Imm8(u8::decode(r, ctx)?))
     } else {
-        Ok(SnesImmediate::Imm16(r.read_u16::<LE>()?))
+        Ok(SnesImmediate::Imm16(u16::decode(r, ctx)?))
     }
 }
 
-#[inline(always)]
-pub fn decode_a<T, R: Read>(
-    _: u8, _: u8, r: &mut R, ctx: &DecodeContext,
+pub fn decode_a<T>(
+    _: u8, _: u8, r: &mut DecodeCursor<'_>, ctx: &DecodeContext,
 ) -> IsaResult<SnesImmediate> {
-    decode_imm(r, ctx.emulation_mode || ctx.a_8_bit)
+    decode_imm(r, ctx, ctx.emulation_mode || ctx.a_8_bit)
 }
-#[inline(always)]
-pub fn decode_xy<T, R: Read>(
-    _: u8, _: u8, r: &mut R, ctx: &DecodeContext,
+pub fn decode_xy<T>(
+    _: u8, _: u8, r: &mut DecodeCursor<'_>, ctx: &DecodeContext,
 ) -> IsaResult<SnesImmediate> {
-    decode_imm(r, ctx.emulation_mode || ctx.xy_8_bit)
+    decode_imm(r, ctx, ctx.emulation_mode || ctx.xy_8_bit)
 }
 
-#[inline(always)]
-pub fn decode_op<T: OpcodeClass, R: Read>(
-    base: u8, op: u8, r: &mut R, ctx: &DecodeContext,
+pub fn decode_op<T: OpcodeClass>(
+    base: u8, op: u8, r: &mut DecodeCursor<'_>, ctx: &DecodeContext,
 ) -> IsaResult<T> {
     T::decode_operands(op.wrapping_sub(base), r, ctx)
 }
-#[inline(always)]
-pub fn decode<T: Decode, R: Read>(
-    _: u8, _: u8, r: &mut R, ctx: &DecodeContext,
+pub fn decode<T: Decode>(
+    _: u8, _: u8, r: &mut DecodeCursor<'_>, ctx: &DecodeContext,
 ) -> IsaResult<T> {
     T::decode(r, ctx)
 }
@@ -151,25 +175,21 @@ pub trait InstructionLength {
 }
 
 impl InstructionLength for u8 {
-    #[inline(always)]
     fn instruction_len(&self) -> u8 {
         1
     }
 }
 impl InstructionLength for u16 {
-    #[inline(always)]
     fn instruction_len(&self) -> u8 {
         2
     }
 }
 impl InstructionLength for SnesOffset {
-    #[inline(always)]
     fn instruction_len(&self) -> u8 {
         3
     }
 }
 impl InstructionLength for SnesImmediate {
-    #[inline(always)]
     fn instruction_len(&self) -> u8 {
         match *self {
             SnesImmediate::Imm8(_) => 1,
@@ -178,13 +198,11 @@ impl InstructionLength for SnesImmediate {
     }
 }
 impl InstructionLength for Rel8 {
-    #[inline(always)]
     fn instruction_len(&self) -> u8 {
         1
     }
 }
 impl InstructionLength for Rel16 {
-    #[inline(always)]
     fn instruction_len(&self) -> u8 {
         2
     }
@@ -195,8 +213,8 @@ pub trait OpcodeClass: Sized {
     fn accepts_op(base: u8, op: u8) -> bool;
     fn op(&self, base: u8) -> u8;
 
-    fn decode_operands(_: u8, _: &mut impl Read, _: &DecodeContext) -> IsaResult<Self>;
-    fn encode_operands(&self, _: &mut impl Write) -> IsaResult<()>;
+    fn encode_operands(&self, _: &mut EncodeCursor<'_>) -> IsaResult<()>;
+    fn decode_operands(_: u8, _: &mut DecodeCursor<'_>, _: &DecodeContext) -> IsaResult<Self>;
 }
 
 /// A helper macro for simple ISAs with an opcode followed by operands.
@@ -263,7 +281,7 @@ macro_rules! isa_instruction_table {
                 $decode_before
                 [$opcode => {
                     $enum_name::$instr $(($(
-                        crate::isa::encoding::$dec::<$ty, _>($opcode, $s3, $s1, $s2)?,
+                        crate::isa::encoding::$dec::<$ty>($opcode, $s3, $s1, $s2)?,
                     )*))?
                 }, $($decode_impl)*]
                 $len_impl
@@ -305,7 +323,7 @@ macro_rules! isa_instruction_table {
                         <$class_ty as crate::isa::encoding::OpcodeClass>::accepts_op($opcode, $s3);
                     if accepts {
                         return Ok($enum_name::$instr $(($(
-                            crate::isa::encoding::$dec::<$ty, _>($opcode, $s3, $s1, $s2)?,
+                            crate::isa::encoding::$dec::<$ty>($opcode, $s3, $s1, $s2)?,
                         )*))?);
                     }
                 } $($decode_before)* ]
@@ -382,19 +400,20 @@ macro_rules! isa_instruction_table {
         }
         impl crate::isa::encoding::Encode for $name {
             #[allow(unreachable_code, unused_variables, unused_imports)]
-            fn encode(&self, w: &mut impl ::std::io::Write) -> crate::isa::IsaResult<()> {
-                use byteorder::*;
-                w.write_u8(self.op())?;
+            fn encode(
+                &self, w: &mut crate::isa::encoding::EncodeCursor<'_>,
+            ) -> crate::isa::IsaResult<()> {
+                w.push_byte(self.op());
                 self.encode_operands(w)
             }
         }
         impl crate::isa::encoding::Decode for $name {
             #[allow(unreachable_patterns, unreachable_code, unused_variables, unused_imports)]
             fn decode(
-                r: &mut impl ::std::io::Read, ctx: &crate::isa::encoding::DecodeContext,
+                r: &mut crate::isa::encoding::DecodeCursor<'_>,
+                ctx: &crate::isa::encoding::DecodeContext,
             ) -> crate::isa::IsaResult<Self> {
-                use byteorder::*;
-                let op = r.read_u8()?;
+                let op = r.pull_byte()?;
                 Self::decode_operands(op, r, ctx)
             }
         }
@@ -412,24 +431,24 @@ macro_rules! isa_instruction_table {
                 return base.wrapping_add(self.op());
             }
 
+            #[allow(unreachable_code, unused_variables, unused_imports)]
+            fn encode_operands(
+                &self, $s1: &mut crate::isa::encoding::EncodeCursor<'_>,
+            ) -> crate::isa::IsaResult<()> {
+                match *self { $($encode_impl)* }
+                Ok(())
+            }
             #[allow(unreachable_patterns, unreachable_code, unused_variables, unused_imports)]
             fn decode_operands(
-                $s3: u8, $s1: &mut impl ::std::io::Read, $s2: &crate::isa::encoding::DecodeContext,
+                $s3: u8,
+                $s1: &mut crate::isa::encoding::DecodeCursor<'_>,
+                $s2: &crate::isa::encoding::DecodeContext,
             ) -> crate::isa::IsaResult<Self> {
-                use byteorder::*;
                 $($decode_before)*
                 Ok(match $s3 {
                     $($decode_impl)*
                     _ => return Err(crate::isa::IsaError::InvalidInstruction),
                 })
-            }
-            #[allow(unreachable_code, unused_variables, unused_imports)]
-            fn encode_operands(
-                &self, $s1: &mut impl ::std::io::Write,
-            ) -> crate::isa::IsaResult<()> {
-                use byteorder::*;
-                match *self { $($encode_impl)* }
-                Ok(())
             }
         }
     };

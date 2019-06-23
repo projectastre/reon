@@ -1,5 +1,4 @@
 use std::fmt::{Display, Formatter, Result as FmtResult};
-use std::io::{Error as IoError};
 
 #[macro_use] pub mod encoding;
 
@@ -32,17 +31,11 @@ pub struct Rel16(pub u16);
 /// An error that occurred during instruction encoding or decoding.
 #[derive(Debug)]
 pub enum IsaError {
-    /// An IO error occurred.
-    IoError(IoError),
+    /// Reached the end of the data.
+    Eof,
     /// An invalid instruction was found.
     InvalidInstruction,
 }
 
 /// A wrapper for instruction related operations that may fail.
 pub type IsaResult<T> = Result<T, IsaError>;
-
-impl From<IoError> for IsaError {
-    fn from(io: IoError) -> Self {
-        IsaError::IoError(io)
-    }
-}

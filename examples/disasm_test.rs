@@ -1,15 +1,14 @@
 use reon::isa::*;
 use reon::isa::encoding::*;
 use reon::isa::w65816::machine::*;
-use std::io::{Cursor, Read, Write};
 
 #[inline(never)]
-fn decode(r: &mut impl Read, ctx: &DecodeContext) -> IsaResult<W65816MachineInstruction> {
+fn decode(r: &mut DecodeCursor<'_>, ctx: &DecodeContext) -> IsaResult<W65816MachineInstruction> {
     W65816MachineInstruction::decode(r, &ctx)
 }
 
 #[inline(never)]
-fn encode(i: &W65816MachineInstruction, w: &mut impl Write) -> IsaResult<()> {
+fn encode(i: &W65816MachineInstruction, w: &mut EncodeCursor<'_>) -> IsaResult<()> {
     i.encode(w)
 }
 
@@ -20,7 +19,7 @@ fn disasm(data: &[u8]) {
         xy_8_bit: false
     };
     let mut idx = 0;
-    let mut cursor = Cursor::new(data);
+    let mut cursor = DecodeCursor::new(data);
     let mut vec = Vec::new();
     while idx < data.len() {
         let instr = decode(&mut cursor, &ctx).unwrap();
@@ -30,7 +29,7 @@ fn disasm(data: &[u8]) {
     }
 
     let mut buf = Vec::new();
-    let mut cursor = Cursor::new(&mut buf);
+    let mut cursor = EncodeCursor::new(&mut buf);
     for instr in vec {
         encode(&instr, &mut cursor).unwrap();
     }
