@@ -115,7 +115,7 @@ isa_instruction_table! {
 
     /// Operand combinations for accumulator related instructions
     pub table AccOperand {
-        0x00 Mem(class MemOperand),
+        0x00 Mem(subtable MemOperand),
         0x09 Imm(ImmA),
     }
 
@@ -136,7 +136,7 @@ isa_instruction_table! {
 
     /// Operand combinations for rotate/shift instructions.
     pub table RotOperand {
-        0x00 Mem(class MemAluOperand),
+        0x00 Mem(subtable MemAluOperand),
         0x0A Acc,
     }
 
@@ -157,7 +157,7 @@ isa_instruction_table! {
         0x1B Tcs,
 
         // Load memory to register
-        0xA0 Lda(class AccOperand),
+        0xA0 Lda(subtable AccOperand),
         0xA2 LdxImm(ImmXy),
         0xA6 LdxZero(u8),
         0xB6 LdxZeroY(u8),
@@ -174,7 +174,7 @@ isa_instruction_table! {
         0x74 StzZeroX(u8),
         0x9C StzNear(u16),
         0x9E StzNearX(u16),
-        0x80 Sta(class MemOperand),
+        0x80 Sta(subtable MemOperand),
         0x86 StxZero(u8),
         0x96 StxZeroY(u8),
         0x8E StxNear(u16),
@@ -205,14 +205,14 @@ isa_instruction_table! {
         0x54 Mvn(u8, u8),
 
         // Alu operations
-        0x00 Ora(class AccOperand),
-        0x20 And(class AccOperand),
-        0x40 Eor(class AccOperand),
-        0x60 Adc(class AccOperand),
-        0xE0 Sbc(class AccOperand),
-        0xC0 Cmp(class AccOperand),
-        0xE0 Cpx(class AluIndexOperand),
-        0xC0 Cpy(class AluIndexOperand),
+        0x00 Ora(subtable AccOperand),
+        0x20 And(subtable AccOperand),
+        0x40 Eor(subtable AccOperand),
+        0x60 Adc(subtable AccOperand),
+        0xE0 Sbc(subtable AccOperand),
+        0xC0 Cmp(subtable AccOperand),
+        0xE0 Cpx(subtable AluIndexOperand),
+        0xC0 Cpy(subtable AluIndexOperand),
 
         // Bit tests
         0x24 BitZero(u8),
@@ -222,11 +222,11 @@ isa_instruction_table! {
         0x89 BitImm(ImmA),
 
         // Increment/decrement operations
-        0xE0 Inc(class MemAluOperand),
+        0xE0 Inc(subtable MemAluOperand),
         0xE8 Inx,
         0xC8 Iny,
         0x1A Ina,
-        0xC0 Dec(class MemAluOperand),
+        0xC0 Dec(subtable MemAluOperand),
         0xCA Dex,
         0x88 Dey,
         0x3A Dea,
@@ -238,10 +238,10 @@ isa_instruction_table! {
         0x1C TrbNear(u16),
 
         // Rotates
-        0x00 Asl(class RotOperand),
-        0x40 Lsr(class RotOperand),
-        0x20 Rol(class RotOperand),
-        0x60 Ror(class RotOperand),
+        0x00 Asl(subtable RotOperand),
+        0x40 Lsr(subtable RotOperand),
+        0x20 Rol(subtable RotOperand),
+        0x60 Ror(subtable RotOperand),
 
         // Unconditional jumps
         0x80 Bra(Rel8),

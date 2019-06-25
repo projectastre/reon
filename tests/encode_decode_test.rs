@@ -17,7 +17,7 @@ macro_rules! isa {
                 let mut cursor = DecodeCursor::new(data);
                 let mut instrs = Vec::new();
                 while cursor.offset() < cursor.len() {
-                    let mut offset = cursor.offset();
+                    let offset = cursor.offset();
                     let instr = Instruction::decode(&mut cursor, &ctx).unwrap();
                     instrs.push(instr);
                     assert_eq!(cursor.offset() - offset, instr.instruction_len() as usize);
@@ -28,7 +28,7 @@ macro_rules! isa {
                 let mut buf = Vec::new();
                 let mut cursor = EncodeCursor::new(&mut buf);
                 for instr in instrs {
-                    let mut offset = cursor.offset();
+                    let offset = cursor.offset();
                     instr.encode(&mut cursor).unwrap();
                     assert_eq!(cursor.offset() - offset, instr.instruction_len() as usize);
                 }

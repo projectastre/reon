@@ -143,21 +143,42 @@ impl Encoder for SnesOffset {
 pub trait OpcodeTable: Sized {
     fn op(self, base: u8) -> u8;
     fn encode_operands(self, _: &mut EncodeCursor<'_>) -> IsaResult<()>;
-    fn decode_operands(
-        _: u8, _: &mut DecodeCursor<'_>, _: &DecodeContext,
-    ) -> IsaResult<Option<Self>>;
 }
 
 /// A trait representing a decodable instruction.
 pub trait InstructionType: Sized + Copy + Encoder<Target = Self> {
+    /// Encode an instruction to machine code.
     fn encode(self, w: &mut EncodeCursor<'_>) -> IsaResult<()> {
         <Self as Encoder>::encode(self, w)
     }
+    /// Decode an instruction from machine code.
     fn decode(w: &mut DecodeCursor<'_>, ctx: &DecodeContext) -> IsaResult<Self> {
         <Self as Encoder>::decode(w, ctx)
     }
+    /// The length of this instruction.
     fn instruction_len(self) -> u8 {
         <Self as Encoder>::instruction_len(self)
+    }
+}
+
+/// The function type used in decode tables.
+pub(crate) type DecodeFn<T> = fn(&mut DecodeCursor<'_>, &DecodeContext) -> IsaResult<T>;
+
+/// The array type used for decode tables.
+pub(crate) type DecodeTable<T> = [DecodeFn<T>; 256];
+
+/// The trait used to map decode tables.
+pub(crate) trait DecodeMap<A> {
+    type Into;
+    fn apply(a: A, r: &mut DecodeCursor<'_>, ctx: &DecodeContext) -> IsaResult<Self::Into>;
+}
+
+/// A null [`DecodeMap`].
+pub(crate) enum NullDecodeMap { }
+impl <A> DecodeMap<A> for NullDecodeMap {
+    type Into = A;
+    fn apply(a: A, _: &mut DecodeCursor<'_>, _: &DecodeContext) -> IsaResult<Self::Into> {
+        Ok(a)
     }
 }
 
@@ -167,14 +188,13 @@ macro_rules! isa_instruction_table {
         <$ty as crate::isa::encoding::Encoder>::encode($val, $r)
     };
     (@encode_op $ty:ty, $val:expr, $r:expr) => {
-        crate::isa::encoding::OpcodeTable::encode_operands($val, $r)
+        $val.__isa_encode_subtable($r)
     };
     (@parse_inner_common
         [$s1:ident $s2:ident $s3:ident $enum_name:ident ($vis:vis) $metas:tt
          [$($enum_contents:tt)*]
          $op_impl:tt
          [$($encode_impl:tt)*]
-         $decode_before:tt
          $decode_impl:tt
          [$($len_impl:tt)*]]
         [$($rest:tt)*]
@@ -184,22 +204,27 @@ macro_rules! isa_instruction_table {
             [
                 $s1 $s2 $s3 $enum_name ($vis) $metas
                 [
-                    $instr $(($(<$ty as crate::isa::encoding::Encoder>::Target,)*))?,
                     $($enum_contents)*
+                    $instr $(($(<$ty as crate::isa::encoding::Encoder>::Target,)*))?,
                 ]
                 $op_impl
-                [$enum_name::$instr $(($($name,)*))? => {
-                    $($(
-                        isa_instruction_table!(@$enc $ty, $name, $s1)?;
-                    )*)?
-                }, $($encode_impl)*]
-                $decode_before
+                [
+                    $($encode_impl)*
+                    $enum_name::$instr $(($($name,)*))? => {
+                        $($(
+                            isa_instruction_table!(@$enc $ty, $name, $s1)?;
+                        )*)?
+                    },
+                ]
                 $decode_impl
-                [$enum_name::$instr $(($($name,)*))? => {
-                    $add_len $($(
-                        + (<$ty as crate::isa::encoding::Encoder>::instruction_len($name))
-                    )*)?
-                }, $($len_impl)*]
+                [
+                    $($len_impl)*
+                    $enum_name::$instr $(($($name,)*))? => {
+                        $add_len $($(
+                            + (<$ty as crate::isa::encoding::Encoder>::instruction_len($name))
+                        )*)?
+                    },
+                ]
             ]
             [$($rest)*]
         );
@@ -209,7 +234,6 @@ macro_rules! isa_instruction_table {
          $enum_contents:tt
          [$($op_impl:tt)*]
          $encode_impl:tt
-         $decode_before:tt
          [$($decode_impl:tt)*]
          $len_impl:tt]
         [$($rest:tt)*]
@@ -220,54 +244,75 @@ macro_rules! isa_instruction_table {
             [
                 $s1 $s2 $s3 $enum_name ($vis) $metas
                 $enum_contents
-                [$enum_name::$instr $(($($name,)*))? => $opcode, $($op_impl)*]
+                [$($op_impl)* $enum_name::$instr $(($($name,)*))? => $opcode,]
                 $encode_impl
-                $decode_before
-                [$opcode => {
-                    return Ok(Some($enum_name::$instr $(($(
-                        <$ty as crate::isa::encoding::Encoder>::decode($s1, $s2)?,
-                    )*))?));
-                }, $($decode_impl)*]
+                [
+                    $($decode_impl)*
+                    {
+                        fn make_fn<M: crate::isa::encoding::DecodeMap<$enum_name>>(
+                            r: &mut crate::isa::encoding::DecodeCursor<'_>,
+                            ctx: &crate::isa::encoding::DecodeContext,
+                        ) -> crate::isa::IsaResult<M::Into> {
+                            M::apply($enum_name::$instr $(($(
+                                <$ty as crate::isa::encoding::Encoder>::decode(r, ctx)?,
+                            )*))?, r, ctx)
+                        }
+                        $s1[$s3.wrapping_add($opcode) as usize] = make_fn::<$s2>;
+                    }
+                ]
                 $len_impl
             ]
             [$($rest)*]
             $opcode $instr 1 $(($(encode $name: $ty,)*))?
         );
     };
-    (@parse_inner_class
+    (@parse_inner_subtable
         [$s1:ident $s2:ident $s3:ident $enum_name:ident ($vis:vis) $metas:tt
          $enum_contents:tt
          [$($op_impl:tt)*]
          $encode_impl:tt
-         [$($decode_before:tt)*]
-         $decode_impl:tt
+         [$($decode_impl:tt)*]
          $len_impl:tt]
         [$($rest:tt)*]
-        $opcode:literal $instr:ident ($class_name:ident: $class_ty:ty)
+        $opcode:literal $instr:ident ($subt_name:ident: $subt_ty:ty)
         ($($name:ident: $ty:ty),*)
     ) => {
         isa_instruction_table!(@parse_inner_common
             [
                 $s1 $s2 $s3 $enum_name ($vis) $metas
                 $enum_contents
-                [$enum_name::$instr ($class_name, $($name,)*) => {
-                    crate::isa::encoding::OpcodeTable::op($class_name, $opcode)
-                }, $($op_impl)*]
+                [
+                    $($op_impl)*
+                    $enum_name::$instr ($subt_name, $($name,)*) => $subt_name.__isa_op($opcode),
+                ]
                 $encode_impl
-                [ if let Some(class) =
-                    <$class_ty as crate::isa::encoding::OpcodeTable>::decode_operands(
-                        $s3.wrapping_sub($opcode), $s1, $s2,
-                    )?
-                {
-                    return Ok(Some($enum_name::$instr (class, $(
-                        <$ty as crate::isa::encoding::Encoder>::decode($s1, $s2)?,
-                    )*)));
-                } $($decode_before)* ]
-                $decode_impl
+                [
+                    $($decode_impl)*
+                    {
+                        struct Map<M>(M);
+                        impl <M: crate::isa::encoding::DecodeMap<$enum_name>>
+                            crate::isa::encoding::DecodeMap<$subt_ty> for Map<M>
+                        {
+                            type Into = M::Into;
+                            fn apply(
+                                m: $subt_ty,
+                                r: &mut crate::isa::encoding::DecodeCursor<'_>,
+                                ctx: &crate::isa::encoding::DecodeContext,
+                            ) -> crate::isa::IsaResult<M::Into> {
+                                M::apply($enum_name::$instr (m, $(
+                                    <$ty as crate::isa::encoding::Encoder>::decode(r, ctx)?,
+                                )*), r, ctx)
+                            }
+                        }
+                        $s1 = <$subt_ty>::__isa_create_decode_table::<Map<$s2>>(
+                            $s1, $s3.wrapping_add($opcode),
+                        );
+                    }
+                ]
                 $len_impl
             ]
             [$($rest)*]
-            $opcode $instr 0 (encode_op $class_name: $class_ty, $(encode $name: $ty,)*)
+            $opcode $instr 0 (encode_op $subt_name: $subt_ty, $(encode $name: $ty,)*)
         );
     };
     (@parse $state:tt [$opcode:literal $instr:ident, $($rest:tt)*]) => {
@@ -283,13 +328,13 @@ macro_rules! isa_instruction_table {
             $opcode $instr (_a: $a, _b: $b)
         );
     };
-    (@parse $state:tt [$opcode:literal $instr:ident(class $a:ty), $($rest:tt)*]) => {
-        isa_instruction_table!(@parse_inner_class $state [$($rest)*]
+    (@parse $state:tt [$opcode:literal $instr:ident(subtable $a:ty), $($rest:tt)*]) => {
+        isa_instruction_table!(@parse_inner_subtable $state [$($rest)*]
             $opcode $instr (_a: $a) ()
         );
     };
-    (@parse $state:tt [$opcode:literal $instr:ident(class $a:ty, $b:ty), $($rest:tt)*]) => {
-        isa_instruction_table!(@parse_inner_class $state [$($rest)*]
+    (@parse $state:tt [$opcode:literal $instr:ident(subtable $a:ty, $b:ty), $($rest:tt)*]) => {
+        isa_instruction_table!(@parse_inner_subtable $state [$($rest)*]
             $opcode $instr (_a: $a) (_b: $b)
         );
     };
@@ -298,7 +343,6 @@ macro_rules! isa_instruction_table {
          [$($enum_contents:tt)*]
          [$($op_impl:tt)*]
          [$($encode_impl:tt)*]
-         [$($decode_before:tt)*]
          [$($decode_impl:tt)*]
          [$($len_impl:tt)*]]
         []
@@ -308,58 +352,60 @@ macro_rules! isa_instruction_table {
         $vis enum $name {
             $($enum_contents)*
         }
-        impl crate::isa::encoding::Encoder for $name {
-            type Target = $name;
-            fn encode(
-                v: $name, w: &mut crate::isa::encoding::EncodeCursor<'_>,
-            ) -> crate::isa::IsaResult<()> {
-                w.push_byte(crate::isa::encoding::OpcodeTable::op(v, 0));
-                crate::isa::encoding::OpcodeTable::encode_operands(v, w)
+        impl $name {
+            #[doc(hidden)]
+            pub(crate) fn __isa_op(self, base: u8) -> u8 {
+                base.wrapping_add(match self { $($op_impl)* })
             }
-            fn decode(
-                r: &mut crate::isa::encoding::DecodeCursor<'_>,
-                ctx: &crate::isa::encoding::DecodeContext,
-            ) -> crate::isa::IsaResult<$name> {
-                let op = r.pull_byte()?;
-                if let Some(instr) =
-                    <$name as crate::isa::encoding::OpcodeTable>::decode_operands(op, r, ctx)?
-                {
-                    Ok(instr)
-                } else {
-                    Err(crate::isa::IsaError::InvalidInstruction)
-                }
-            }
-            fn instruction_len(v: $name) -> u8 {
-                match v { $($len_impl)* }
-            }
-        }
-        impl crate::isa::encoding::OpcodeTable for $name {
-            fn op(self, base: u8) -> u8 {
-                return base.wrapping_add(match self { $($op_impl)* });
-            }
-            fn encode_operands(
+            #[doc(hidden)]
+            pub(crate) fn __isa_encode_subtable(
                 self, $s1: &mut crate::isa::encoding::EncodeCursor<'_>,
             ) -> crate::isa::IsaResult<()> {
                 match self { $($encode_impl)* }
                 Ok(())
             }
-            fn decode_operands(
+            #[allow(non_camel_case_types)]
+            #[doc(hidden)]
+            pub(crate) const fn __isa_create_decode_table<
+                $s2: crate::isa::encoding::DecodeMap<$name>,
+            >(
+                mut $s1: crate::isa::encoding::DecodeTable<$s2::Into>,
                 $s3: u8,
-                $s1: &mut crate::isa::encoding::DecodeCursor<'_>,
-                $s2: &crate::isa::encoding::DecodeContext,
-            ) -> crate::isa::IsaResult<Option<Self>> {
-                $($decode_before)*
-                match $s3 {
-                    $($decode_impl)*
-                    _ => { }
-                }
-                Ok(None)
+            ) -> crate::isa::encoding::DecodeTable<$s2::Into> {
+                $($decode_impl)*
+                $s1
+            }
+        }
+        impl crate::isa::encoding::Encoder for $name {
+            type Target = $name;
+            fn encode(
+                v: $name, w: &mut crate::isa::encoding::EncodeCursor<'_>,
+            ) -> crate::isa::IsaResult<()> {
+                w.push_byte(v.__isa_op(0));
+                v.__isa_encode_subtable(w)
+            }
+            fn decode(
+                r: &mut crate::isa::encoding::DecodeCursor<'_>,
+                ctx: &crate::isa::encoding::DecodeContext,
+            ) -> crate::isa::IsaResult<$name> {
+                const OP_TABLE: crate::isa::encoding::DecodeTable<$name> = {
+                    let table: crate::isa::encoding::DecodeTable<$name> = [
+                        |_, _| Err(crate::isa::IsaError::InvalidInstruction); 256
+                    ];
+                    $name::__isa_create_decode_table::<crate::isa::encoding::NullDecodeMap>(
+                        table, 0,
+                    )
+                };
+                OP_TABLE[r.pull_byte()? as usize](r, ctx)
+            }
+            fn instruction_len(v: $name) -> u8 {
+                match v { $($len_impl)* }
             }
         }
     };
     ($($(#[$meta:meta])* $vis:vis table $name:ident { $($body:tt)* })*) => {$(
         isa_instruction_table!(@parse
-            [s1 s2 s3 $name ($vis) ($(#[$meta])*) [] [] [] [] [] []]
+            [_s1 _s2 _s3 $name ($vis) ($(#[$meta])*) [] [] [] [] []]
             [$($body)*]
         );
     )*};
