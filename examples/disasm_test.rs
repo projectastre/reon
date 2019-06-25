@@ -1,14 +1,14 @@
-use reon::isa::*;
-use reon::isa::encoding::*;
-use reon::isa::w65816::machine::*;
+use reon::isa::IsaResult;
+use reon::isa::encoding::{InstructionType, EncodeCursor, DecodeCursor, DecodeContext};
+use reon::isa::w65816::*;
 
 #[inline(never)]
-fn decode(r: &mut DecodeCursor<'_>, ctx: &DecodeContext) -> IsaResult<W65816MachineInstruction> {
-    W65816MachineInstruction::decode(r, &ctx)
+fn decode(r: &mut DecodeCursor<'_>, ctx: &DecodeContext) -> IsaResult<Instruction> {
+    Instruction::decode(r, &ctx)
 }
 
 #[inline(never)]
-fn encode(i: &W65816MachineInstruction, w: &mut EncodeCursor<'_>) -> IsaResult<()> {
+fn encode(i: &Instruction, w: &mut EncodeCursor<'_>) -> IsaResult<()> {
     i.encode(w)
 }
 
@@ -36,8 +36,10 @@ fn disasm(data: &[u8]) {
 
     println!();
     println!("Input and output equal: {}", buf.as_slice() == data);
+    println!("Instr size: {}/{}", std::mem::size_of::<Instruction>(),
+                                  std::mem::align_of::<Instruction>());
 }
 
 fn main() {
-    disasm(include_bytes!("../arch-65816.sfc"));
+    disasm(include_bytes!("../tests/arch-65816.sfc"));
 }

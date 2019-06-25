@@ -14,20 +14,6 @@ impl Display for SnesOffset {
     }
 }
 
-#[derive(Copy, Clone, Ord, PartialOrd, PartialEq, Eq, Debug, Hash)]
-pub enum SnesImmediate {
-    Imm8(u8),
-    Imm16(u16),
-}
-
-/// Represents a relative 8 bit offset.
-#[derive(Copy, Clone, Ord, PartialOrd, PartialEq, Eq, Debug, Hash)]
-pub struct Rel8(pub u8);
-
-/// Represents a relative 16 bit offset.
-#[derive(Copy, Clone, Ord, PartialOrd, PartialEq, Eq, Debug, Hash)]
-pub struct Rel16(pub u16);
-
 /// An error that occurred during instruction encoding or decoding.
 #[derive(Debug)]
 pub enum IsaError {

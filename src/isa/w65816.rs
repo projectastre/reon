@@ -1,7 +1,98 @@
-//! Types relating to the machine code representation of 65816 assembly.
+//! Modules related to the 65c816 ISA.
 
-use crate::isa::{Rel8, Rel16, SnesOffset};
+use crate::isa::*;
 use crate::isa::encoding::*;
+
+/// Represents an immediate offset in the 65c816 ISA.
+#[derive(Copy, Clone, Ord, PartialOrd, PartialEq, Eq, Debug, Hash)]
+pub enum Imm {
+    Imm8(u8),
+    Imm16(u16),
+}
+
+mod imm_internal {
+    pub enum ImmA { }
+    pub enum ImmXy { }
+}
+use imm_internal::*;
+
+fn encode_imm(i: Imm, w: &mut EncodeCursor<'_>) -> IsaResult<()> {
+    match i {
+        Imm::Imm8(v) => u8::encode(v, w)?,
+        Imm::Imm16(v) => u16::encode(v, w)?,
+    }
+    Ok(())
+}
+fn decode_imm(r: &mut DecodeCursor<'_>, ctx: &DecodeContext, is_8_bit: bool) -> IsaResult<Imm> {
+    if is_8_bit {
+        Ok(Imm::Imm8(u8::decode(r, ctx)?))
+    } else {
+        Ok(Imm::Imm16(u16::decode(r, ctx)?))
+    }
+}
+fn len_imm(i: Imm) -> u8 {
+    match i {
+        Imm::Imm8(_) => 1,
+        Imm::Imm16(_) => 2,
+    }
+}
+
+impl Encoder for ImmA {
+    type Target = Imm;
+    fn encode(v: Self::Target, w: &mut EncodeCursor) -> IsaResult<()> {
+        encode_imm(v, w)
+    }
+    fn decode(r: &mut DecodeCursor, ctx: &DecodeContext) -> IsaResult<Self::Target> {
+        decode_imm(r, ctx, ctx.emulation_mode || ctx.a_8_bit)
+    }
+    fn instruction_len(v: Self::Target) -> u8 {
+        len_imm(v)
+    }
+}
+impl Encoder for ImmXy {
+    type Target = Imm;
+    fn encode(v: Self::Target, w: &mut EncodeCursor) -> IsaResult<()> {
+        encode_imm(v, w)
+    }
+    fn decode(r: &mut DecodeCursor, ctx: &DecodeContext) -> IsaResult<Self::Target> {
+        decode_imm(r, ctx, ctx.emulation_mode || ctx.xy_8_bit)
+    }
+    fn instruction_len(v: Self::Target) -> u8 {
+        len_imm(v)
+    }
+}
+
+/// Represents a relative 8 bit offset.
+#[derive(Copy, Clone, Ord, PartialOrd, PartialEq, Eq, Debug, Hash)]
+pub struct Rel8(pub u8);
+impl Encoder for Rel8 {
+    type Target = Rel8;
+    fn encode(v: Self::Target, w: &mut EncodeCursor) -> IsaResult<()> {
+        u8::encode(v.0, w)
+    }
+    fn decode(r: &mut DecodeCursor, ctx: &DecodeContext) -> IsaResult<Self::Target> {
+        Ok(Rel8(u8::decode(r, ctx)?))
+    }
+    fn instruction_len(_: Self::Target) -> u8 {
+        1
+    }
+}
+
+/// Represents a relative 16 bit offset.
+#[derive(Copy, Clone, Ord, PartialOrd, PartialEq, Eq, Debug, Hash)]
+pub struct Rel16(pub u16);
+impl Encoder for Rel16 {
+    type Target = Rel16;
+    fn encode(v: Self::Target, w: &mut EncodeCursor) -> IsaResult<()> {
+        u16::encode(v.0, w)
+    }
+    fn decode(r: &mut DecodeCursor, ctx: &DecodeContext) -> IsaResult<Self::Target> {
+        Ok(Rel16(u16::decode(r, ctx)?))
+    }
+    fn instruction_len(_: Self::Target) -> u8 {
+        2
+    }
+}
 
 isa_instruction_table! {
     /// Operand combinations for memory related instructions
@@ -25,12 +116,12 @@ isa_instruction_table! {
     /// Operand combinations for accumulator related instructions
     pub table AccOperand {
         0x00 Mem(class MemOperand),
-        0x09 Imm(#imm_a),
+        0x09 Imm(ImmA),
     }
 
     /// Operand combinations for index ALU related instructions
     pub table AluIndexOperand {
-        0x00 Imm(#imm_xy),
+        0x00 Imm(ImmXy),
         0x04 Zero(u8),
         0x0C Near(u16),
     }
@@ -50,7 +141,7 @@ isa_instruction_table! {
     }
 
     /// Raw instruction representation for the 65816 ISA.
-    pub table W65816MachineInstruction {
+    pub table Instruction {
         // Transfer instructions
         0xA8 Tay,
         0xAA Tax,
@@ -67,12 +158,12 @@ isa_instruction_table! {
 
         // Load memory to register
         0xA0 Lda(class AccOperand),
-        0xA2 LdxImm(#imm_xy),
+        0xA2 LdxImm(ImmXy),
         0xA6 LdxZero(u8),
         0xB6 LdxZeroY(u8),
         0xAE LdxNear(u16),
         0xBE LdxNearY(u16),
-        0xA0 LdyImm(#imm_xy),
+        0xA0 LdyImm(ImmXy),
         0xA4 LdyZero(u8),
         0xB4 LdyZeroX(u8),
         0xAC LdyNear(u16),
@@ -128,7 +219,7 @@ isa_instruction_table! {
         0x2C BitNear(u16),
         0x34 BitZeroX(u8),
         0x3C BitNearX(u16),
-        0x89 BitImm(#imm_a),
+        0x89 BitImm(ImmA),
 
         // Increment/decrement operations
         0xE0 Inc(class MemAluOperand),
@@ -201,3 +292,4 @@ isa_instruction_table! {
         0xEA Nop,
     }
 }
+impl InstructionType for Instruction { }
